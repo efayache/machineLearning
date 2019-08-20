@@ -1,0 +1,157 @@
+---
+title: "ML - Project"
+author: "Elyes Fayache"
+date: "8/19/2019"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(caret)
+```
+
+## Introduction
+One thing that people regularly do is quantify how much of a particular activity they do, but they rarely quantify how well they do it. The goal of this project is  to use data from accelerometers on the belt, forearm, arm, and dumbell of 6 participants to predict the manner in which they did the exercise. 
+
+```{r}
+# We will first load the data
+ds_training <- read.csv("./data/pml-training.csv")
+ds_testing  <- read.csv("./data/pml-testing.csv")
+```
+
+## Data exploration and cleansing
+When exploring the data we 
+```{r}
+str(ds_training)
+```
+
+We can see that many variables contains a high number of NA, lets delete variables that contains more than 80% of NAs from our testing and training data sets.
+```{r}
+colNAs <- sapply(ds_training, function (x) mean(is.na(x)) > 0.8)
+ds_cleanTraining <- ds_training[, colNAs == FALSE]
+ds_cleanTesting <- ds_testing[, colNAs == FALSE]
+```
+
+This first set of cleaning actions allowed us to reduce from 160 to 93 variables.
+```{r}
+dim(ds_cleanTraining)
+```
+Let s now identify variables with near zero variance and delete them from the data set as they would be poor predictors
+```{r}
+nzv <- nearZeroVar(ds_cleanTraining,saveMetrics = TRUE)
+ds_cleanTraining <- ds_cleanTraining[, nzv$nzv == FALSE]
+
+nzv <- nearZeroVar(ds_cleanTesting,saveMetrics = TRUE)
+ds_cleanTesting <- ds_cleanTesting[, nzv$nzv == FALSE]
+```
+
+Let s now check our new dataframe structure to see if we can further cleanse the data:
+```{r}
+str(ds_cleanTraining)
+```
+We can notice that the first 5 columns (i.e.: X, user_name, timestamp1, timestamp2, timestamp3, num_window) are only descriptive and therefore should not be included as predictors. Furthermore, including them as predictors can be mislead our decision model (e.g.: the model can leverage X as a Predictor where it makes no sense). Lets do that:
+```{r}
+ds_cleanTraining <- ds_cleanTraining[, -c(1:5)]
+ds_cleanTesting <- ds_cleanTesting[ , -c(1:5)]
+```
+
+## Predictive Model analysis
+We will use evaluate three models to predict the "classe" variable and the one with higher accuracy will be finally selected for predictions.
+Methods that will be used are: 
+* Decision Tree, 
+* Random Forest 
+* and Generalized Boosted Model
+
+### Creating the training and validation set
+```{r}
+# I am creating a separate training and validation set as testing data set do not contain the class variable to be predict; therefore we will need to use a subset of the training data to evaluate models performance
+
+inTrain <- createDataPartition(ds_cleanTraining$classe, p=0.80, list=FALSE)
+
+ds_training1 <- ds_cleanTraining[inTrain,]
+ds_testing1 <- ds_cleanTraining[- inTrain, ]
+
+
+
+trControl <- trainControl(method="cv", number=5, allowParallel = TRUE) #I am using 5 folds cross validation to limit the effects of overfitting and efficiency of the model. It turns out that it also accelerate the decision tree model for me.
+#Ref. : https://github.com/lgreski/datasciencectacontent/blob/master/markdown/pml-randomForestPerformance.md
+
+```
+I added this code chunk to improve the performance of 
+
+
+### Method: Decision Tree
+```{r cache=TRUE}
+set.seed(12345)
+
+#Enable Parallel Processing
+library(parallel)
+library(doParallel)
+cluster <- makeCluster(detectCores() - 1) # convention to leave 1 core for OS
+registerDoParallel(cluster)
+#End Enable Parallel Processing
+
+mod_rpart <- train(classe ~ ., method="rpart", data=ds_training1, trControl=trControl)
+
+#After processing the data, we explicitly shut down the cluster by calling the stopCluster() and registerDoSEQ() functions. The registerDoSEQ() function is required to force R to return to single threaded processing.
+
+stopCluster(cluster)
+registerDoSEQ()
+#End stop parallel processing
+
+```
+
+Now that the model has been created lets plot the decision tree
+```{r cache=TRUE}
+library(rattle)
+fancyRpartPlot(mod_rpart$finalModel)
+```
+```{r cache=TRUE}
+pred_test <- predict(mod_rpart, newdata=ds_testing1)
+CM <- confusionMatrix(reference= ds_testing1$classe, data=pred_test)
+```
+
+By displaying the Confusion Matrix we see an Accuracy og 49.81% for the decision tree model.
+```{r}
+CM
+```
+
+### Method Random Forest
+Let s do the same by evaluating the Random Forest Model accuracy
+```{r cache=TRUE}
+
+#Enable Parallel Processing
+cluster <- makeCluster(detectCores() - 1) # convention to leave 1 core for OS
+registerDoParallel(cluster) #Register Parallel processing again
+#End enable Parallel processing
+
+mod_rf <- train(classe ~ ., method="rf", data=ds_training1, trControl=trControl)
+
+#Stop Parallel processing
+stopCluster(cluster)
+registerDoSEQ()
+```
+Printing the final model
+```{r cache=TRUE}
+mod_rf$finalModel
+```
+Performing prediction on the test set:
+```{r cache=TRUE}
+pred_test_RF <- predict(mod_rf, newdata=ds_testing1)
+CM_RF <- confusionMatrix(reference= ds_testing1$classe, data=pred_test_RF)
+```
+Printing the Confusion Matrix
+```{r}
+CM_RF
+```
+### Model Selection
+We will choose the Random Forest model as it grant us with 99.994% of accuracy as compared to the the Decision Tree model which gives 66.17% of accuracy.
+
+## Prediction
+Let s use the built Random Forest Model to predict the provided testing data.
+```{r}
+res <- predict(mod_rf, newdata=ds_testing)
+res
+```
+
+
